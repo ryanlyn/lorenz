@@ -27,6 +27,7 @@ export const slackTrackerProvider: TrackerProvider = {
   configAliases: {
     bot_user_id: "botUserId",
     app_token: "appToken",
+    workflow_ids: "workflowIds",
     emoji_states: "emojiStates",
     marker_emoji: "markerEmoji",
     reply_lookback_days: "replyLookbackDays",
@@ -43,6 +44,7 @@ export const slackTrackerProvider: TrackerProvider = {
         "users",
         "botUserId",
         "appToken",
+        "workflowIds",
         "emojiStates",
         "markerEmoji",
         "replyLookbackDays",
@@ -63,6 +65,11 @@ export const slackTrackerProvider: TrackerProvider = {
     const users = stringListOption(options, "users")
       ?.map((user) => resolveEnvReference(user, context.env))
       .filter((user) => user !== "");
+    // Workflow ids form a separate, default-empty trust boundary for Workflow Builder posts.
+    // Resolve environment references just like channels/users so deployments can inject them.
+    const workflowIds = stringListOption(options, "workflowIds")
+      ?.map((workflowId) => resolveEnvReference(workflowId, context.env))
+      .filter((workflowId) => workflowId !== "");
     const botUserId = context.resolveSecret?.(
       stringOption(options, "botUserId"),
       "SLACK_BOT_USER_ID",
@@ -78,6 +85,7 @@ export const slackTrackerProvider: TrackerProvider = {
     return {
       ...(channels !== undefined && channels.length > 0 ? { channels } : {}),
       ...(users !== undefined && users.length > 0 ? { users } : {}),
+      ...(workflowIds !== undefined && workflowIds.length > 0 ? { workflowIds } : {}),
       ...(botUserId !== undefined ? { botUserId } : {}),
       ...(appToken !== undefined && appToken !== "" ? { appToken } : {}),
       ...(emojiStates !== undefined ? { emojiStates } : {}),

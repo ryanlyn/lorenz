@@ -6,6 +6,8 @@ export interface SlackMessage {
   subtype?: string | undefined;
   /** True when Slack identifies the author as a bot or integration. */
   isBot?: boolean | undefined;
+  /** Slack Workflow Builder workflow id, present on workflow-authored messages. */
+  workflowId?: string | undefined;
   /** Slack `thread_ts`; unequal to `ts` means this history row is a reply rather than a root. */
   threadTs?: string | undefined;
   /** Every reaction name on the message, any author. Display only - never drives state. */

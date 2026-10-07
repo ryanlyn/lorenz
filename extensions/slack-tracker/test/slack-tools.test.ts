@@ -11,9 +11,11 @@ import {
   WORKPAD_METADATA_EVENT,
 } from "@lorenz/slack-tracker";
 
-function settings() {
+function settings(overrides: Record<string, unknown> = {}) {
   return parseSlackConfig(
-    { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U1" } },
+    {
+      tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U1", ...overrides },
+    },
     { SLACK_BOT_TOKEN: "xoxb" },
   );
 }
@@ -376,6 +378,47 @@ test("slack_update_status resolves a case-variant status to the canonical name",
   assert.deepEqual(
     transport.replies.map((reply) => reply.body),
     ["Lorenz tracking record.", "status: Done"],
+  );
+});
+
+test("Slack tools accept an allowlisted Workflow Builder root", async () => {
+  const workflowSettings = settings({
+    users: ["U_HUMAN"],
+    workflow_ids: ["W_ALLOWED"],
+  });
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1.1",
+          text: "<@U1> run app maintenance",
+          subtype: "bot_message",
+          isBot: true,
+          workflowId: "W_ALLOWED",
+          reactions: [],
+        },
+      ],
+    },
+    {
+      botUserId: "U1",
+      allowedUsers: ["U_HUMAN"],
+      allowedWorkflowIds: ["W_ALLOWED"],
+    },
+  );
+
+  const updated = await executeSlackTool(
+    "slack_update_status",
+    { issueId: "C1:1.1", status: "Done" },
+    workflowSettings,
+    transport,
+  );
+  assert.equal(updated.success, true);
+
+  const query = await executeSlackTool("slack_query", {}, workflowSettings, transport);
+  assert.equal(query.success, true);
+  assert.deepEqual(
+    (query.result as { rows: Array<{ issueId: string }> }).rows.map((row) => row.issueId),
+    ["C1:1.1"],
   );
 });
 

@@ -23,7 +23,8 @@ workpad/session-modal surfaces, and the `slack_*` agent tools. The provider live
   `status: <Name>` replies and human `@bot !<command>` mentions are events. Reactions are a
   bot-owned visibility mirror, not the source of truth. Only the BOT's own reactions ever read
   as state; a human's reaction never moves an issue - humans transition with `!` commands.
-- Humans create issues by mentioning the bot. Agents do not. There is no `slack_create_issue`.
+- Humans create issues by mentioning the bot. Explicitly allowlisted Workflow Builder workflows
+  may also create root issues; agents do not. There is no `slack_create_issue`.
 
 ## Setting up the Slack app
 
@@ -104,6 +105,7 @@ trackers:
 | `api_key`             | `SLACK_BOT_TOKEN`   |                                                               | The `xoxb-` bot token.                                                                                                                |
 | `app_token`           | `SLACK_APP_TOKEN`   |                                                               | Optional `xapp-` app-level token for Socket Mode wakeups and immediate live steering.                                                  |
 | `users`               |                     | Any authenticated human                                       | Optional author allowlist applied to issue creation and steering replies.                                                             |
+| `workflow_ids`        |                     | No workflows                                                  | Optional Workflow Builder workflow id allowlist for bot-authored root requests. Entries resolve `$VAR` references.                     |
 | `endpoint`            |                     | `https://slack.com/api`                                       | Slack Web API base.                                                                                                                   |
 | `emoji_states`        |                     | `eyes: In Progress`, `white_check_mark: Done`, `x: Cancelled` | Emoji name to state name, merged over the built-in `DEFAULT_EMOJI_STATES`.                                                            |
 | `marker_emoji`        |                     | `robot_face`                                                  | Non-status reaction marking a tracked root and acknowledging a claimed request before worker assignment.                              |
@@ -147,13 +149,17 @@ the worker moves the issue to `In Progress` only after it starts.
 The mention regex matches `<@BOTID>` or the piped form `<@BOTID|label>`. A reply-mention posted
 while the daemon was down longer than the lookback window is never picked up.
 
-Request provenance fails closed. The author must be an authenticated human: messages authored by
-the configured bot, another Slack bot or integration, or no reported user are never requests.
-System subtypes such as `channel_join` are also ignored even when their generated text mentions the
-bot. Plain human messages, file shares, and `/me` messages can be roots; a `thread_broadcast` can be
-a human reply request anchored to its parent, but never a second root issue from channel history.
-An existing marker or status reaction may preserve an earlier `users` allowlist decision for a
-valid human request, but it cannot override these provenance checks.
+Request provenance fails closed. By default the author must be an authenticated human. A
+bot-authored root is accepted only when Slack identifies it as a Workflow Builder message and its
+`workflow_id` is explicitly listed in `workflow_ids`; the root must still mention Lorenz. Ordinary
+bot/integration posts, the configured bot's posts, messages with no human or workflow identity, and
+all workflow-authored replies remain ineligible. System subtypes such as `channel_join` are also
+ignored even when their generated text mentions the bot. Plain human messages, file shares, and
+`/me` messages can be roots; a `thread_broadcast` can be a human reply request anchored to its
+parent, but never a second root issue from channel history. An existing marker or status reaction
+may preserve an earlier `users` decision for a valid human request, but it never bypasses
+`workflow_ids` or the other provenance checks. Removing a workflow id therefore disables its root
+requests while preserving any separately tracked human reply request in the thread.
 
 The root message maps to a normalized issue:
 
@@ -396,9 +402,10 @@ narrow it with `where`, `order_by`, and paging.
 
 ### Why there is no `slack_create_issue`
 
-Issues are created only by humans mentioning the bot. The `slack` pack ships no issue-creation tool
-deliberately, so there is no agent path to create a Slack issue. Agents read and update existing
-threads through `slack_read_thread`, `slack_query`, `slack_update_status`, and `slack_comment`.
+Issues are created only by humans mentioning the bot or configured Workflow Builder roots. The
+`slack` pack ships no issue-creation tool deliberately, so there is no agent path to create a Slack
+issue. Agents read and update existing threads through `slack_read_thread`, `slack_query`,
+`slack_update_status`, and `slack_comment`.
 
 ## Workflow example
 

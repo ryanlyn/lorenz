@@ -170,6 +170,7 @@ Slack as a tracker: an @-mention of the bot becomes an issue. See [trackers/slac
 | `bot_user_id` | string | env `SLACK_BOT_USER_ID` | The bot's `U...` id. Required; the production transport fails closed without it. |
 | `api_key` | string (secret) | env `SLACK_BOT_TOKEN` | The `xoxb-` bot token. |
 | `endpoint` | string | `https://slack.com/api` | Slack Web API base URL. |
+| `workflow_ids` | string[] | `[]` | Workflow Builder ids allowed to create bot-authored root issues. Supports `$VAR` refs. |
 | `emoji_states` | map | `{eyes: In Progress, white_check_mark: Done, x: Cancelled}` | Reaction-name to state-name map, merged over the defaults. |
 | `marker_emoji` | string | `robot_face` | The bot's ownership-marker reaction. |
 | `reply_lookback_days` | number | `2` | How far back to discover new reply-mention threads. |

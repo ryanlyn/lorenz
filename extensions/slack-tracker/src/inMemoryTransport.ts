@@ -17,6 +17,7 @@ interface SeedMessage {
   user?: string;
   subtype?: string;
   isBot?: boolean;
+  workflowId?: string;
   threadTs?: string;
   /** Reactions authored by the bot, including status mirrors and the tracking marker. */
   reactions?: string[];
@@ -34,6 +35,8 @@ interface InMemoryOptions {
   botUserId?: string;
   /** Author allowlist mirroring `tracker.users`: empty means no author constraint. */
   allowedUsers?: string[];
+  /** Workflow allowlist mirroring `tracker.workflow_ids`: empty rejects workflow roots. */
+  allowedWorkflowIds?: string[];
   /** Resolvable user profiles for `getUser` (defaults to none). */
   users?: Record<string, SlackUser>;
 }
@@ -58,11 +61,13 @@ export class InMemorySlackTransport implements SlackTransport {
   private readonly messages: Map<string, StoredMessage[]> = new Map();
   private readonly botUserId: string | undefined;
   private readonly allowedUsers: string[];
+  private readonly allowedWorkflowIds: string[];
   private readonly users: Record<string, SlackUser>;
 
   constructor(seed: Record<string, SeedMessage[]> = {}, opts: InMemoryOptions = {}) {
     this.botUserId = opts.botUserId;
     this.allowedUsers = opts.allowedUsers ?? [];
+    this.allowedWorkflowIds = opts.allowedWorkflowIds ?? [];
     this.users = opts.users ?? {};
     for (const [channel, msgs] of Object.entries(seed)) {
       this.messages.set(
@@ -74,6 +79,7 @@ export class InMemorySlackTransport implements SlackTransport {
           ...(m.user !== undefined ? { user: m.user } : {}),
           ...(m.subtype !== undefined ? { subtype: m.subtype } : {}),
           ...(m.isBot !== undefined ? { isBot: m.isBot } : {}),
+          ...(m.workflowId !== undefined ? { workflowId: m.workflowId } : {}),
           ...(m.threadTs !== undefined ? { threadTs: m.threadTs } : {}),
           botReactions: [...(m.reactions ?? [])],
           humanReactions: [...(m.humanReactions ?? [])],
@@ -90,7 +96,15 @@ export class InMemorySlackTransport implements SlackTransport {
       for (const m of this.messages.get(channel) ?? []) {
         const message = this.snapshot(m);
         if (!isTrackableThreadRoot(message)) continue;
-        if (isAllowedRequestMessage(message, this.botUserId, this.allowedUsers, "root")) {
+        if (
+          isAllowedRequestMessage(
+            message,
+            this.botUserId,
+            this.allowedUsers,
+            "root",
+            this.allowedWorkflowIds,
+          )
+        ) {
           mentions.push(message);
         } else if (m.thread.length > 0) {
           threadedRoots.push(message);

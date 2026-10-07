@@ -33,6 +33,23 @@ function settings() {
   );
 }
 
+function workflowSettings() {
+  return parseSlackConfig(
+    {
+      tracker: {
+        kind: "slack",
+        channels: ["C1"],
+        bot_user_id: "U_BOT",
+        users: ["U_HUMAN"],
+        workflow_ids: ["W_ALLOWED"],
+        active_states: ["Todo", "In Progress"],
+        terminal_states: ["Done", "Cancelled"],
+      },
+    },
+    { SLACK_BOT_TOKEN: "xoxb" },
+  );
+}
+
 /** Wrap a transport, counting the reads the mirror is supposed to be saving. */
 function counting(inner: SlackTransport): SlackTransport & {
   scans: number;
@@ -111,6 +128,48 @@ test("mirror serves repeat scans and new events from memory after one bootstrap 
   const third = await mirror.scanChannels(["C1"]);
   assert.equal(inner.scans, 1);
   assert.deepEqual(third.mentions.map((m) => m.ts).sort(), ["1.0", "2.0"]);
+});
+
+test("mirror admits a configured workflow after duplicate mention and message events", async () => {
+  const inner = counting(new InMemorySlackTransport({ C1: [] }, { botUserId: "U_BOT" }));
+  const mirror = new MirrorBackedSlackTransport(inner, workflowSettings(), {
+    reconcileIntervalMs: 60_000,
+    now: () => 0,
+    logger: { warn: () => {} },
+  });
+  mirror.setSocketHealthy(true);
+  await mirror.scanChannels(["C1"]); // Bootstrap the event-fed mirror.
+
+  // app_mention lacks workflow provenance; the duplicate message event enriches the same root.
+  mirror.applyEvent(
+    messageEvent({
+      type: "app_mention",
+      channel: "C1",
+      ts: "2.0",
+      text: "<@U_BOT> first workflow request",
+      bot_id: "B_FIRST",
+    }),
+  );
+  assert.deepEqual((await mirror.scanChannels(["C1"])).mentions, []);
+
+  mirror.applyEvent(
+    messageEvent({
+      type: "message",
+      subtype: "bot_message",
+      channel: "C1",
+      ts: "2.0",
+      text: "<@U_BOT> first workflow request",
+      bot_id: "B_FIRST",
+      workflow_id: "W_ALLOWED",
+    }),
+  );
+
+  const scan = await mirror.scanChannels(["C1"]);
+  assert.deepEqual(
+    scan.mentions.map((message) => ({ ts: message.ts, workflowId: message.workflowId })),
+    [{ ts: "2.0", workflowId: "W_ALLOWED" }],
+  );
+  assert.equal(inner.scans, 1);
 });
 
 test("mirror rejects channel joins from both bootstrap snapshots and live events", async () => {
@@ -679,7 +738,7 @@ test("an irrelevant reply into an unknown root performs no serialized point read
   );
 });
 
-test("an unrelated bot reply into an unknown root performs no serialized point read", async () => {
+test("a workflow reply into an unknown root performs no serialized point read", async () => {
   const inner = counting(
     new InMemorySlackTransport(
       {
@@ -697,13 +756,12 @@ test("an unrelated bot reply into an unknown root performs no serialized point r
   mirror.applyEvent(
     messageEvent({
       type: "message",
-      subtype: "bot_message",
-      bot_id: "B_OTHER",
-      user: "U_OTHER_BOT",
+      user: "U3",
+      workflow_id: "W_OTHER",
       channel: "C1",
       ts: "5.5",
       thread_ts: "5.0",
-      text: "unrelated automation",
+      text: "<@U_BOT> workflow reply",
     }),
   );
   await mirror.scanChannels(["C1"]);

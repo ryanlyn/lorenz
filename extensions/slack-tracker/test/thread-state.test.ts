@@ -7,6 +7,7 @@ import {
   isAsideText,
   parseStatusCommand,
   stateFromThread,
+  TRACKING_METADATA_EVENT,
   type SlackMessage,
   type SlackThreadReply,
 } from "@lorenz/slack-tracker";
@@ -189,6 +190,54 @@ test("a reply mention in a non-mention thread is the request, not a transition",
   assert.equal(result.state, "Done");
   assert.equal(result.request?.ts, "102.1");
   assert.match(result.request?.text ?? "", /please fix this/);
+});
+
+test("a disabled workflow root does not shadow a human reply request", () => {
+  const workflowRoot: SlackMessage = {
+    channel: "C1",
+    ts: "100.000100",
+    text: "<@U_BOT> run app maintenance",
+    subtype: "bot_message",
+    isBot: true,
+    workflowId: "W_WORKFLOW",
+    reactions: [],
+    botReactions: [],
+  };
+  const humanRequest: SlackThreadReply = {
+    ts: "101.1",
+    text: "<@U_BOT> do the above",
+    user: "U_HUMAN",
+  };
+
+  const fallback = stateFromThread(workflowRoot, [humanRequest], settings({ users: ["U_HUMAN"] }));
+  assert.equal(fallback.request?.ts, "101.1");
+
+  const denied = stateFromThread(
+    {
+      ...workflowRoot,
+      reactions: ["robot_face"],
+      botReactions: ["robot_face"],
+    },
+    [{ ...humanRequest, user: "U_DENIED" }],
+    settings({ users: ["U_ALLOWED"] }),
+  );
+  assert.equal(denied.request, undefined);
+
+  const trackedReply: SlackThreadReply = {
+    ts: "102.1",
+    text: "Lorenz tracking record.",
+    user: "U_BOT",
+    metadata: {
+      eventType: TRACKING_METADATA_EVENT,
+      payload: { origin: "reply", request_ts: "101.1" },
+    },
+  };
+  const preserved = stateFromThread(
+    workflowRoot,
+    [humanRequest, trackedReply],
+    settings({ users: ["U_HUMAN"], workflow_ids: ["W_WORKFLOW"] }),
+  );
+  assert.equal(preserved.request?.ts, "101.1");
 });
 
 test("bot, system, and unknown-author replies cannot request or transition work", () => {

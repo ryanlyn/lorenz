@@ -49,6 +49,10 @@ trackers:
     # broad audience.
     # users:
     #   - $SLACK_REQUESTER_ID
+    # Allow specific Workflow Builder automations to create root issues. This is separate from
+    # the human users allowlist and remains disabled when omitted.
+    # workflow_ids:
+    #   - $SLACK_WORKFLOW_ID
     emoji_states:
       eyes: In Progress
       white_check_mark: Done
@@ -170,8 +174,8 @@ tracker selected by `tracker.kind`.
   changes are honored.
 - Set `Done` with `slack_update_status` only after implementation and validation are complete.
 - Reactions are a visual mirror, not the source of truth.
-- Humans create work by mentioning the bot in a configured channel or thread. There is no
-  `slack_create_issue`.
+- Humans create work by mentioning the bot in a configured channel or thread. Configured Workflow
+  Builder automations may also create root work. There is no `slack_create_issue`.
 
 ## Execution contract
 

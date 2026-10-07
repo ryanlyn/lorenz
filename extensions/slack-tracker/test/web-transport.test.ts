@@ -301,6 +301,60 @@ test("scanChannels excludes Slack system, bot, self, unknown-author, and broadca
   );
 });
 
+test("scanChannels preserves and admits only configured Workflow Builder roots", async () => {
+  const fetchImpl = (async () =>
+    new Response(
+      JSON.stringify({
+        ok: true,
+        messages: [
+          {
+            type: "message",
+            subtype: "bot_message",
+            ts: "1791147607.979319",
+            thread_ts: "1791147607.979319",
+            text: "<@U_BOT> run app maintenance",
+            bot_id: "B0C5R3HSY9K",
+            workflow_id: "Wf0C5EH5D40P",
+            trigger_id: "Ft0C5QK9LSBX",
+          },
+          {
+            type: "message",
+            subtype: "bot_message",
+            ts: "1791147608.000000",
+            text: "<@U_BOT> untrusted workflow",
+            bot_id: "B_OTHER",
+            workflow_id: "W_OTHER",
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )) as typeof fetch;
+  const configured = parseSlackConfig(
+    {
+      tracker: {
+        kind: "slack",
+        channels: ["C1"],
+        bot_user_id: "U_BOT",
+        users: ["U_HUMAN"],
+        workflow_ids: ["Wf0C5EH5D40P"],
+      },
+    },
+    { SLACK_BOT_TOKEN: "xoxb-abc" },
+  );
+  const disabled = parseSlackConfig(
+    { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U_BOT" } },
+    { SLACK_BOT_TOKEN: "xoxb-abc" },
+  );
+
+  const messages = await new SlackWebTransport(configured, fetchImpl).listMentions(["C1"]);
+
+  assert.deepEqual(
+    messages.map((message) => ({ ts: message.ts, workflowId: message.workflowId })),
+    [{ ts: "1791147607.979319", workflowId: "Wf0C5EH5D40P" }],
+  );
+  assert.deepEqual(await new SlackWebTransport(disabled, fetchImpl).listMentions(["C1"]), []);
+});
+
 test("listMentions follows response_metadata.next_cursor across pages", async () => {
   const calls: Array<{ url: string }> = [];
   const fetchImpl = (async (url: string | URL) => {
@@ -950,6 +1004,7 @@ test("getThread reads conversations.replies and drops the parent message", async
           { ts: "1.2", text: "first reply", user: "U_HUMAN" },
           { ts: "1.3", text: "second reply" },
           { ts: "1.4", text: "automation", user: "U_AUTOMATION", bot_id: "B1" },
+          { ts: "1.45", text: "workflow reply", user: "U_AUTOMATION", workflow_id: "W1" },
           {
             ts: "1.5",
             text: "edited reply",
@@ -970,6 +1025,7 @@ test("getThread reads conversations.replies and drops the parent message", async
     { ts: "1.2", text: "first reply", user: "U_HUMAN" },
     { ts: "1.3", text: "second reply" },
     { ts: "1.4", text: "automation", user: "U_AUTOMATION", isBot: true },
+    { ts: "1.45", text: "workflow reply", user: "U_AUTOMATION", isBot: true },
     { ts: "1.5", text: "edited reply", user: "U_HUMAN", edited: true },
     { ts: "1.6", text: "file upload", user: "U_HUMAN", subtype: "file_share" },
   ]);
