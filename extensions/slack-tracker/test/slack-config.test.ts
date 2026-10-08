@@ -251,6 +251,27 @@ test("parses the optional users allowlist and resolves $VAR references, dropping
   assert.deepEqual(slackTrackerOptions(omitted).users, []);
 });
 
+test("parses the optional workflow allowlist and resolves $VAR references", () => {
+  const explicit = parseSlackConfig(
+    {
+      tracker: {
+        kind: "slack",
+        channels: ["C1"],
+        bot_user_id: "U1",
+        workflow_ids: ["W_A", "$SLACK_WORKFLOW_ID", "$UNSET_WORKFLOW_ID"],
+      },
+    },
+    { SLACK_BOT_TOKEN: "xoxb", SLACK_WORKFLOW_ID: "W_REF" },
+  );
+  assert.deepEqual(slackTrackerOptions(explicit).workflowIds, ["W_A", "W_REF"]);
+
+  const omitted = parseSlackConfig(
+    { tracker: { kind: "slack", channels: ["C1"], bot_user_id: "U1" } },
+    { SLACK_BOT_TOKEN: "xoxb" },
+  );
+  assert.deepEqual(slackTrackerOptions(omitted).workflowIds, []);
+});
+
 test("a direct-message channel id is a valid watched channel", () => {
   // DMs are watched by listing the D... channel id; nothing special distinguishes it from a
   // C.../G... channel at the config layer, and dispatch validation accepts it.

@@ -34,6 +34,12 @@ export interface SlackTrackerOptions {
    * safe. It only narrows dispatch; the bot-mention requirement still applies on top of it.
    */
   users: string[];
+  /**
+   * Optional allowlist of Slack Workflow Builder workflow ids whose bot-authored root messages
+   * may create issues. Empty means workflow-authored messages are rejected. Human requests still
+   * use `users`; workflow replies can never create issues or steer an existing one.
+   */
+  workflowIds: string[];
   /** Slack emoji-name → workflow-state overrides (merged over the defaults). */
   emojiStates?: Record<string, string> | undefined;
   /**
@@ -83,6 +89,7 @@ export function slackTrackerOptions(settings: Settings): SlackTrackerOptions {
   return {
     channels: stringListOption(options, "channels") ?? [],
     users: stringListOption(options, "users") ?? [],
+    workflowIds: stringListOption(options, "workflowIds") ?? [],
     ...(botUserId !== undefined ? { botUserId } : {}),
     ...(appToken !== undefined ? { appToken } : {}),
     ...(emojiStates !== undefined ? { emojiStates } : {}),

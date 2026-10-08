@@ -75,6 +75,7 @@ interface MirrorRoot {
   user?: string | undefined;
   subtype?: string | undefined;
   isBot?: boolean | undefined;
+  workflowId?: string | undefined;
   threadTs?: string | undefined;
   /** All reaction names on the root (display), and the bot-authored subset (state-bearing). */
   reactions: string[];
@@ -112,6 +113,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
   private readonly channels = new Map<string, ChannelState>();
   private readonly botUserId: string | undefined;
   private readonly allowedUsers: string[];
+  private readonly allowedWorkflowIds: string[];
   private readonly reconcileIntervalMs: number;
   private readonly now: () => number;
   private readonly logger: SlackTrackerLogger;
@@ -141,6 +143,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     const slackOptions = slackTrackerOptions(settings);
     this.botUserId = slackOptions.botUserId;
     this.allowedUsers = slackOptions.users;
+    this.allowedWorkflowIds = slackOptions.workflowIds;
     this.reconcileIntervalMs = options.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_MS;
     this.now = options.now ?? Date.now;
     this.logger = options.logger ?? { warn: (message) => console.warn(message) };
@@ -653,6 +656,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       user: message.user,
       subtype: message.subtype,
       isBot: message.isBot,
+      workflowId: message.workflowId,
       threadTs: message.threadTs,
       reactions: [...message.reactions],
       botReactions: [...message.botReactions],
@@ -665,7 +669,15 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     for (const root of state.roots.values()) {
       const message = this.toScanMessage(channel, state, root);
       if (!isTrackableThreadRoot(message)) continue;
-      if (isAllowedRequestMessage(message, this.botUserId, this.allowedUsers, "root")) {
+      if (
+        isAllowedRequestMessage(
+          message,
+          this.botUserId,
+          this.allowedUsers,
+          "root",
+          this.allowedWorkflowIds,
+        )
+      ) {
         out.mentions.push(message);
       } else if ((message.replyCount ?? 0) > 0) {
         out.threadedRoots.push(message);
@@ -688,6 +700,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       ...(root.user !== undefined ? { user: root.user } : {}),
       ...(root.subtype !== undefined ? { subtype: root.subtype } : {}),
       ...(root.isBot !== undefined ? { isBot: root.isBot } : {}),
+      ...(root.workflowId !== undefined ? { workflowId: root.workflowId } : {}),
       ...(root.threadTs !== undefined ? { threadTs: root.threadTs } : {}),
       ...(replyCount > 0 ? { replyCount } : {}),
       ...(latestReply !== undefined ? { latestReply } : {}),
@@ -786,9 +799,11 @@ export class MirrorBackedSlackTransport implements SlackTransport {
     const text = typeof event.text === "string" ? event.text : "";
     const user = typeof event.user === "string" ? event.user : undefined;
     const metadata = toMessageMetadata(isRecord(event.metadata) ? event.metadata : undefined);
+    const workflowId = typeof event.workflow_id === "string" ? event.workflow_id : undefined;
     const threadTs = threadTsOfSlackMessage(event);
     const isBot =
       typeof event.bot_id === "string" ||
+      workflowId !== undefined ||
       subtype === "bot_message" ||
       (user !== undefined && user === this.botUserId);
     if (threadTs !== undefined && threadTs !== ts) {
@@ -801,7 +816,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
         isBot,
       });
     } else {
-      this.applyRootUpsert(channel, { ts, text, user, subtype, isBot, threadTs });
+      this.applyRootUpsert(channel, { ts, text, user, subtype, isBot, workflowId, threadTs });
     }
   }
 
@@ -813,6 +828,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       user?: string | undefined;
       subtype?: string | undefined;
       isBot?: boolean | undefined;
+      workflowId?: string | undefined;
       threadTs?: string | undefined;
     },
   ): void {
@@ -825,6 +841,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       if (message.user !== undefined) existing.user = message.user;
       if (message.subtype !== undefined) existing.subtype = message.subtype;
       if (message.isBot === true) existing.isBot = true;
+      if (message.workflowId !== undefined) existing.workflowId = message.workflowId;
       if (message.threadTs !== undefined) existing.threadTs = message.threadTs;
       return;
     }
@@ -834,6 +851,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       user: message.user,
       subtype: message.subtype,
       isBot: message.isBot,
+      workflowId: message.workflowId,
       threadTs: message.threadTs,
       reactions: [],
       botReactions: [],
@@ -859,6 +877,7 @@ export class MirrorBackedSlackTransport implements SlackTransport {
       this.botUserId,
       this.allowedUsers,
       "reply",
+      this.allowedWorkflowIds,
     );
     if (!state.roots.has(rootTs)) {
       const couldTrackRoot = reply.user === this.botUserId || eligibleReplyMention;
@@ -970,13 +989,16 @@ export class MirrorBackedSlackTransport implements SlackTransport {
           subtype: editedSubtype,
           isBot:
             typeof edited.bot_id === "string" ||
+            typeof edited.workflow_id === "string" ||
             editedSubtype === "bot_message" ||
             (editedUser !== undefined && editedUser === this.botUserId),
+          workflowId: typeof edited.workflow_id === "string" ? edited.workflow_id : undefined,
           threadTs,
         },
         this.botUserId,
         this.allowedUsers,
         "root",
+        this.allowedWorkflowIds,
       );
       rememberBounded(state.rootCreateBarriers, ts, ROOT_CREATE_BARRIERS_MAX);
       if (!eligibleNow) {

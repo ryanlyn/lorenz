@@ -41,6 +41,22 @@ function botSettings() {
   );
 }
 
+function workflowSettings() {
+  return parseSlackConfig(
+    {
+      tracker: {
+        kind: "slack",
+        channels: ["C1"],
+        bot_user_id: "U_BOT",
+        users: ["U_HUMAN"],
+        workflow_ids: ["W_ALLOWED"],
+        active_states: ["Todo", "In Progress"],
+      },
+    },
+    { SLACK_BOT_TOKEN: "xoxb-test" },
+  );
+}
+
 test("mentions become issues; the bot's reactions drive state", async () => {
   const transport = new InMemorySlackTransport({
     C1: [
@@ -75,6 +91,48 @@ test("mentions become issues; the bot's reactions drive state", async () => {
     byId.map((i) => i.state),
     ["Done"],
   );
+});
+
+test("an allowlisted Workflow Builder root remains valid through discovery and refresh", async () => {
+  const transport = new InMemorySlackTransport(
+    {
+      C1: [
+        {
+          ts: "1700000000.000300",
+          text: "<@U_BOT> run app maintenance",
+          subtype: "bot_message",
+          isBot: true,
+          workflowId: "W_ALLOWED",
+          reactions: [],
+        },
+        {
+          ts: "1700000000.000400",
+          text: "<@U_BOT> untrusted workflow",
+          subtype: "bot_message",
+          isBot: true,
+          workflowId: "W_OTHER",
+          reactions: ["robot_face"],
+        },
+      ],
+    },
+    {
+      botUserId: "U_BOT",
+      allowedUsers: ["U_HUMAN"],
+      allowedWorkflowIds: ["W_ALLOWED"],
+    },
+  );
+  const client = new SlackTrackerClient(workflowSettings(), transport);
+
+  const candidates = await client.fetchCandidateIssues();
+  assert.deepEqual(
+    candidates.map((issue) => ({ id: issue.id, title: issue.title })),
+    [{ id: "C1:1700000000.000300", title: "run app maintenance" }],
+  );
+  assert.deepEqual(
+    (await client.fetchIssuesByIds(["C1:1700000000.000300"])).map((issue) => issue.id),
+    ["C1:1700000000.000300"],
+  );
+  assert.deepEqual(await client.fetchIssuesByIds(["C1:1700000000.000400"]), []);
 });
 
 test("dispatch receipt immediately adds the non-status tracking marker", async () => {
@@ -1414,6 +1472,7 @@ test("watch applies steering policy while admitting thread broadcasts", () => {
   emit({ ...reply, text: "<@U_BOT> !done" });
   emit({ ...reply, text: "<@U_BOT> !aside context only" });
   emit({ ...reply, bot_id: "B_OTHER", text: "bot reply" });
+  emit({ ...reply, user: "U_ALICE", workflow_id: "W_OTHER", text: "workflow reply" });
   emit({ ...reply, subtype: "message_changed", text: "edited" });
   emit({ ...reply, user: "U_ALICE", subtype: "file_share", text: "system subtype" });
   emit({ ...reply, thread_ts: undefined, text: "root message" });
@@ -1427,6 +1486,7 @@ test("watch applies steering policy while admitting thread broadcasts", () => {
   });
 
   assert.deepEqual(changes, [
+    {},
     {},
     {},
     {},
@@ -1505,6 +1565,17 @@ test("busy notices follow the same author allowlist as live steering", async () 
 
   onEvent({
     event: { ...reply, ts: "1700000000.000250", user: "U_ALICE", bot_id: "B_OTHER" },
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(transport.ephemerals.length, 0);
+
+  onEvent({
+    event: {
+      ...reply,
+      ts: "1700000000.000275",
+      user: "U_ALICE",
+      workflow_id: "W_OTHER",
+    },
   });
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(transport.ephemerals.length, 0);

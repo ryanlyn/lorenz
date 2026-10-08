@@ -91,6 +91,28 @@ test("request admission accepts supported human replies and applies the author a
   assert.equal(isTrackableThreadRoot({ ...request, subtype: "channel_join" }), false);
 });
 
+test("request admission accepts only allowlisted Workflow Builder roots", () => {
+  const workflowRequest = {
+    ts: "1.0",
+    text: "<@U_BOT> run app maintenance",
+    subtype: "bot_message",
+    isBot: true,
+    workflowId: "W_ALLOWED",
+  };
+
+  assert.equal(isRequestMessage(workflowRequest, "U_BOT", "root"), false);
+  assert.equal(
+    isAllowedRequestMessage(workflowRequest, "U_BOT", ["U_HUMAN"], "root", ["W_ALLOWED"]),
+    true,
+  );
+  assert.equal(isAllowedRequestMessage(workflowRequest, "U_BOT", ["U_HUMAN"], "root", []), false);
+  assert.equal(
+    isAllowedRequestMessage(workflowRequest, "U_BOT", ["U_HUMAN"], "root", ["W_OTHER"]),
+    false,
+  );
+  assert.equal(isRequestMessage(workflowRequest, "U_BOT", "reply", ["W_ALLOWED"]), false);
+});
+
 test("stripLeadingMention removes only the leading bot mention when botUserId is set", () => {
   assert.equal(stripLeadingMention("<@U_BOT> fix it", "U_BOT"), "fix it");
   assert.equal(stripLeadingMention("<@U_BOT|worker> fix it", "U_BOT"), "fix it");

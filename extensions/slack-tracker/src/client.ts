@@ -19,6 +19,7 @@ import { handleSlackInteraction } from "./interactions.js";
 import {
   emojiForState,
   isAllowedAuthor,
+  isAllowedRequestMessage,
   isRequestMessage,
   stateFromReactions,
   statusEmojiMap,
@@ -400,7 +401,7 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
         text,
         user,
         ...(subtype ? { subtype } : {}),
-        isBot: typeof record.bot_id === "string",
+        isBot: typeof record.bot_id === "string" || typeof record.workflow_id === "string",
       },
       this.settings,
     );
@@ -458,10 +459,10 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
         }
       }
       const thread = await resolveThreadState(this.settings, this.transport, root);
-      const { botUserId, users } = slackTrackerOptions(this.settings);
+      const { botUserId, users, workflowIds } = slackTrackerOptions(this.settings);
       const rootMentionIsTracked =
-        isRequestMessage(root, botUserId, "root") &&
-        (isAllowedAuthor(root.user, users) ||
+        isRequestMessage(root, botUserId, "root", workflowIds) &&
+        (isAllowedRequestMessage(root, botUserId, users, "root", workflowIds) ||
           isBotMarked(root, markerEmoji) ||
           isBotStatusMarked(root, this.settings));
       if (!rootMentionIsTracked && thread.request === undefined) continue;
@@ -491,10 +492,14 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
       roots.push(root);
     }
     const issues: Issue[] = [];
-    const { botUserId, users } = slackTrackerOptions(this.settings);
+    const { botUserId, users, workflowIds } = slackTrackerOptions(this.settings);
     for (const root of roots) {
-      const rootIsRequest = isRequestMessage(root, botUserId, "root");
-      if (rootIsRequest && !isAllowedAuthor(root.user, users) && !isBotMarked(root, markerEmoji)) {
+      const rootIsRequest = isRequestMessage(root, botUserId, "root", workflowIds);
+      if (
+        rootIsRequest &&
+        !isAllowedRequestMessage(root, botUserId, users, "root", workflowIds) &&
+        !isBotMarked(root, markerEmoji)
+      ) {
         continue;
       }
       const thread = await resolveThreadState(this.settings, this.transport, root);
@@ -610,7 +615,15 @@ export class SlackTrackerClient implements RuntimeTrackerClient {
     const { botUserId, users } = slackTrackerOptions(this.settings);
     if (user === null || botUserId === undefined) return;
     if (
-      !isRequestMessage({ text, user, isBot: typeof event.bot_id === "string" }, botUserId, "reply")
+      !isRequestMessage(
+        {
+          text,
+          user,
+          isBot: typeof event.bot_id === "string" || typeof event.workflow_id === "string",
+        },
+        botUserId,
+        "reply",
+      )
     ) {
       return;
     }

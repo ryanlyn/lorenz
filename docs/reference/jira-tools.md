@@ -139,7 +139,8 @@ Six tools over the watched Slack channels. Every tool requires a configured `bot
 
 A Slack `issueId` is `<channel>:<ts>` of the thread root. `slack_update_status` posts the bot's authoritative `status:` reply (reactions are only a visibility mirror) and rejects an unknown state name. `slack_query` rows are `issueId`, `channel`, `ts`, `title`, `state`, `stateType`, `labels`, `text`, `url`; `expand` accepts `thread` and `reactions`; requested `channels` are intersected with the configured allow-list. Its default projection is `issueId`, `title`, `state`, `labels`. `slack_channel_context` reads `before` and `after` messages around the anchor (each defaults to `10`, maximum `50`).
 
-There is no `slack_create_issue`: only a human creating an @-mention starts a Slack issue.
+There is no `slack_create_issue`: a human @-mention or an explicitly configured Workflow Builder
+root starts a Slack issue.
 
 ### `discord` pack
 

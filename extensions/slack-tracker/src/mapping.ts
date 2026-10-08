@@ -55,6 +55,7 @@ type SlackRequestMessage = Pick<
   SlackMessage | SlackThreadReply,
   "text" | "user" | "subtype" | "isBot"
 > & {
+  workflowId?: string | undefined;
   ts?: string | undefined;
   threadTs?: string | undefined;
 };
@@ -75,10 +76,11 @@ export function isTrackableThreadRoot(message: SlackRequestMessage): boolean {
 }
 
 /**
- * True when a Slack message can intrinsically be an issue request. This is deliberately separate
- * from the configurable author allowlist: an established marker may preserve an earlier
- * authorization decision, but it must never make a system, bot-authored, self-authored, or
- * broadcast pseudo-root message into a request.
+ * True when a Slack message can be an issue request. Human provenance is deliberately separate
+ * from the configurable `users` allowlist: an established marker may preserve an earlier human
+ * authorization decision. Workflow provenance remains tied to `allowedWorkflowIds`, and no marker
+ * may make a system, arbitrary bot-authored, self-authored, or broadcast pseudo-root message into
+ * a request.
  *
  * Plain messages, human file shares, and `/me` messages retain request semantics. A
  * `thread_broadcast` may be a reply request, but never a second root issue from channel history.
@@ -87,12 +89,25 @@ export function isRequestMessage(
   message: SlackRequestMessage,
   botUserId: string | undefined,
   origin: SlackRequestOrigin,
+  allowedWorkflowIds: string[] = [],
 ): boolean {
   if (!isBotMention(message.text, botUserId)) return false;
+  if (origin === "root" && !isTrackableThreadRoot(message)) return false;
+  // Workflow Builder has no human `user`; Slack instead supplies a workflow id on its bot-authored
+  // root. Workflow admission stays fail-closed here so a disabled workflow root can still be
+  // promoted by a later eligible human reply. A workflow reply is never a request or steering
+  // input, and ordinary app/bot messages remain rejected.
+  if (message.workflowId !== undefined) {
+    return (
+      origin === "root" &&
+      message.isBot === true &&
+      (message.subtype === undefined || message.subtype === "bot_message") &&
+      allowedWorkflowIds.includes(message.workflowId)
+    );
+  }
   if (message.user === undefined) return false;
   if (message.isBot === true) return false;
   if (botUserId !== undefined && message.user === botUserId) return false;
-  if (origin === "root" && !isTrackableThreadRoot(message)) return false;
   if (
     message.subtype === undefined ||
     message.subtype === "file_share" ||
@@ -109,10 +124,11 @@ export function isAllowedRequestMessage(
   botUserId: string | undefined,
   allowedUsers: string[],
   origin: SlackRequestOrigin,
+  allowedWorkflowIds: string[] = [],
 ): boolean {
-  return (
-    isRequestMessage(message, botUserId, origin) && isAllowedAuthor(message.user, allowedUsers)
-  );
+  if (!isRequestMessage(message, botUserId, origin, allowedWorkflowIds)) return false;
+  if (message.workflowId !== undefined) return true;
+  return isAllowedAuthor(message.user, allowedUsers);
 }
 
 /**

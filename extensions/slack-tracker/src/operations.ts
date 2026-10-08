@@ -2,7 +2,7 @@ import type { Settings } from "@lorenz/domain";
 
 import {
   emojiForState,
-  isAllowedAuthor,
+  isAllowedRequestMessage,
   isRequestMessage,
   stateFromReactions,
   statusEmojiMap,
@@ -52,7 +52,12 @@ export async function requireTrackedMessage(
   channel: string,
   ts: string,
 ): Promise<SlackMessage> {
-  const { channels, users, markerEmoji = "robot_face" } = slackTrackerOptions(settings);
+  const {
+    channels,
+    users,
+    workflowIds,
+    markerEmoji = "robot_face",
+  } = slackTrackerOptions(settings);
   const botUserId = requireBotUserId(settings);
   if (!channels.includes(channel)) {
     throw new Error(`channel '${channel}' is not a configured tracker channel`);
@@ -61,10 +66,15 @@ export async function requireTrackedMessage(
   if (!message) {
     throw new Error(`no tracked issue at ${channel}:${ts}`);
   }
-  if (isRequestMessage(message, botUserId, "root")) {
+  if (isRequestMessage(message, botUserId, "root", workflowIds)) {
     // A dedicated marker records acceptance by an earlier poll. It keeps a root mention tracked
     // if the author allowlist is later tightened, while new issues still honor the allowlist.
-    if (isAllowedAuthor(message.user, users) || isBotMarked(message, markerEmoji)) return message;
+    if (
+      isAllowedRequestMessage(message, botUserId, users, "root", workflowIds) ||
+      isBotMarked(message, markerEmoji)
+    ) {
+      return message;
+    }
     // A bot-owned status reaction is an established acceptance record. Preserve that trust
     // decision and normalize the thread to durable origin metadata plus the dedicated marker.
     // A failed backfill retries on a later read without orphaning the active issue.
@@ -168,7 +178,13 @@ export async function ensureSlackTrackingRecord(
     );
   if (thread.tracking !== undefined) return thread.tracking;
   const botUserId = requireBotUserId(settings);
-  const tracking: ThreadTracking | undefined = isRequestMessage(root, botUserId, "root")
+  const { workflowIds } = slackTrackerOptions(settings);
+  const tracking: ThreadTracking | undefined = isRequestMessage(
+    root,
+    botUserId,
+    "root",
+    workflowIds,
+  )
     ? { origin: "root" }
     : thread.request !== undefined
       ? { origin: "reply", requestTs: thread.request.ts }

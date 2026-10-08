@@ -20,6 +20,7 @@ interface RawSlackMessage {
   text?: string;
   user?: string;
   bot_id?: string;
+  workflow_id?: string;
   subtype?: string;
   thread_ts?: string;
   edited?: unknown;
@@ -93,6 +94,7 @@ export class SlackWebTransport implements SlackTransport {
   private readonly token: string;
   private readonly botUserId: string | undefined;
   private readonly allowedUsers: string[];
+  private readonly allowedWorkflowIds: string[];
   private readonly maxHistoryPages: number;
   private readonly scanLookbackDays: number;
   private readonly now: () => number;
@@ -110,6 +112,7 @@ export class SlackWebTransport implements SlackTransport {
     const slackOptions = slackTrackerOptions(settings);
     this.botUserId = slackOptions.botUserId;
     this.allowedUsers = slackOptions.users;
+    this.allowedWorkflowIds = slackOptions.workflowIds;
     this.maxHistoryPages = options.maxHistoryPages ?? MAX_HISTORY_PAGES;
     this.scanLookbackDays = options.scanLookbackDays ?? slackOptions.scanLookbackDays ?? 0;
     this.now = options.now ?? Date.now;
@@ -219,7 +222,15 @@ export class SlackWebTransport implements SlackTransport {
         if (typeof m.ts !== "string") continue;
         const message = toMessage(channel, m, this.botUserId);
         if (!isTrackableThreadRoot(message)) continue;
-        if (isAllowedRequestMessage(message, this.botUserId, this.allowedUsers, "root")) {
+        if (
+          isAllowedRequestMessage(
+            message,
+            this.botUserId,
+            this.allowedUsers,
+            "root",
+            this.allowedWorkflowIds,
+          )
+        ) {
           buffer.mentions.push(message);
         } else if ((message.replyCount ?? 0) > 0) {
           // Non-mention roots (and root mentions from a non-allowed author) that carry a thread:
@@ -690,7 +701,9 @@ function toMessage(channel: string, m: RawSlackMessage, botUserId?: string): Sla
     text: m.text ?? "",
     ...(typeof m.user === "string" ? { user: m.user } : {}),
     ...(typeof m.subtype === "string" ? { subtype: m.subtype } : {}),
+    ...(typeof m.workflow_id === "string" ? { workflowId: m.workflow_id } : {}),
     ...(typeof m.bot_id === "string" ||
+    typeof m.workflow_id === "string" ||
     m.subtype === "bot_message" ||
     (botUserId !== undefined && m.user === botUserId)
       ? { isBot: true }
@@ -719,7 +732,13 @@ function toThreadReply(m: RawSlackMessage): SlackThreadReply {
   const reply: SlackThreadReply = { ts: m.ts ?? "", text: m.text ?? "" };
   if (typeof m.user === "string") reply.user = m.user;
   if (typeof m.subtype === "string") reply.subtype = m.subtype;
-  if (typeof m.bot_id === "string" || m.subtype === "bot_message") reply.isBot = true;
+  if (
+    typeof m.bot_id === "string" ||
+    typeof m.workflow_id === "string" ||
+    m.subtype === "bot_message"
+  ) {
+    reply.isBot = true;
+  }
   if (m.edited !== undefined) reply.edited = true;
   const metadata = toMessageMetadata(m.metadata);
   if (metadata !== undefined) reply.metadata = metadata;

@@ -176,14 +176,24 @@ export function stateFromThread(
   replies: SlackThreadReply[],
   settings: Settings,
 ): ThreadState {
-  const { botUserId, users, markerEmoji = "robot_face" } = slackTrackerOptions(settings);
+  const {
+    botUserId,
+    users,
+    workflowIds,
+    markerEmoji = "robot_face",
+  } = slackTrackerOptions(settings);
   const ordered = [...replies].sort((a, b) => compareSlackTs(a.ts, b.ts));
-  const rootIsMention = isRequestMessage(root, botUserId, "root");
-  const rootCanAnchorRequest = isTrackableThreadRoot(root);
   const tracking = trackingRecordOf(ordered, botUserId);
+  // Preserve an already-recorded human reply origin when its workflow root is enabled later.
+  const rootIsMention =
+    tracking?.origin !== "reply" && isRequestMessage(root, botUserId, "root", workflowIds);
+  const rootCanAnchorRequest = isTrackableThreadRoot(root);
   const rootOrigin = tracking?.origin === "root";
+  // A marker on a workflow root records that workflow's earlier admission; it must not become a
+  // blanket authorization for a later human reply after the workflow is removed from the list.
   const markerRecordsReplyOrigin =
     !rootIsMention &&
+    root.workflowId === undefined &&
     rootCanAnchorRequest &&
     tracking === undefined &&
     root.botReactions.includes(markerEmoji);
